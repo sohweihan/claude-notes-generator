@@ -117,6 +117,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Maximum number of work items to return. Defaults to MAX_FILES_PER_RUN.",
     )
     parser.add_argument("--report-path", help="Optional path to also write the JSON payload.")
+    parser.add_argument(
+        "--rename-paper",
+        metavar="TITLE",
+        help="Rename a paper (identified by --module + --lecture) to the given title string "
+             "and update all associated assets and notes. Exits immediately after rename.",
+    )
     return parser.parse_args(argv)
 
 
@@ -828,6 +834,68 @@ def paper_label_from_stem(stem: str) -> str:
     return stem
 
 
+def rename_paper(vault_root: Path, collection: str, old_label: str, new_title: str) -> dict[str, str]:
+    """Rename a paper from old_label to a sanitized form of new_title.
+
+    Updates the PDF file, all associated assets, and all .md files in Notes/ and
+    Summaries/. Called by the process-paper workflow after Claude Code reads the
+    first-page image and extracts the full title.
+
+    Returns a dict with old_label, new_label, and lists of renamed files.
+    """
+    new_label = sanitize_title_for_label(new_title)
+    if new_label == old_label:
+        return {"old_label": old_label, "new_label": new_label, "renamed": []}
+
+    collection_dir = vault_root / collection
+    papers_dir = collection_dir / "_papers"
+    assets_dir = collection_dir / "Notes" / "assets"
+
+    old_pdf = papers_dir / f"{old_label}.pdf"
+    new_pdf = papers_dir / f"{new_label}.pdf"
+    renamed: list[str] = []
+
+    if old_pdf.exists() and not new_pdf.exists():
+        old_pdf.rename(new_pdf)
+        renamed.append(f"PDF: {old_pdf.name} → {new_pdf.name}")
+
+    old_prefix = _pdf_asset_prefix(old_label)
+    new_prefix = _pdf_asset_prefix(new_label)
+
+    if assets_dir.is_dir():
+        for asset in sorted(assets_dir.iterdir()):
+            if asset.name.startswith(old_prefix):
+                new_name = new_prefix + asset.name[len(old_prefix):]
+                asset.rename(asset.parent / new_name)
+                renamed.append(f"Asset: {asset.name} → {new_name}")
+
+    for md_dir in (collection_dir / "Notes", collection_dir / "Summaries"):
+        if not md_dir.is_dir():
+            continue
+        for note in md_dir.glob("*.md"):
+            text = note.read_text(encoding="utf-8")
+            updated = (
+                text
+                .replace(old_prefix, new_prefix)
+                .replace(f"source_pdf: {old_label}.pdf", f"source_pdf: {new_label}.pdf")
+                .replace(f"paper_label: {old_label}", f"paper_label: {new_label}")
+                .replace(f"lecture: {old_label}", f"lecture: {new_label}")
+            )
+            if updated != text:
+                note.write_text(updated, encoding="utf-8")
+                renamed.append(f"Note updated: {note.name}")
+        # Rename the note file itself if labelled by old_label
+        for suffix in (" - Notes.md", " - Summary.md"):
+            old_note = md_dir / f"{old_label}{suffix}"
+            new_note = md_dir / f"{new_label}{suffix}"
+            if old_note.exists() and not new_note.exists():
+                old_note.rename(new_note)
+                renamed.append(f"File: {old_note.name} → {new_note.name}")
+
+    return {"old_label": old_label, "new_label": new_label, "renamed": renamed}
+
+
+
 def extract_pdf_title(pdf_path: Path) -> str | None:
     try:
         doc = fitz.open(str(pdf_path))
@@ -886,7 +954,10 @@ def _rename_paper_to_title(pdf_path: Path, papers_dir: Path) -> Path:
         return pdf_path
     new_label = sanitize_title_for_label(raw_title)
     new_path = pdf_path.parent / f"{new_label}.pdf"
-    if new_path == pdf_path or new_path.exists():
+    if new_path == pdf_path:
+        return pdf_path
+    # Title collision: another PDF already owns this name — keep the original stem.
+    if new_path.exists():
         return pdf_path
 
     old_prefix = _pdf_asset_prefix(pdf_path.stem)
@@ -1083,6 +1154,14 @@ def count_pdf_pages(pdf_path: Path) -> int:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     vault_root = find_vault_root()
+
+    if args.rename_paper:
+        if not args.module or not args.lecture:
+            raise SystemExit("--rename-paper requires --module and --lecture (the current paper label).")
+        result = rename_paper(vault_root, args.module, args.lecture, args.rename_paper)
+        print(json.dumps(result, indent=2))
+        return
+
     scope = {
         "module": args.module,
         "lecture": args.lecture,
@@ -1296,12 +1375,21 @@ def main(argv: list[str] | None = None) -> None:
                 notes_folder.mkdir(parents=True, exist_ok=True)
                 summaries_folder.mkdir(parents=True, exist_ok=True)
 
-                # If a note already exists under the stem-based label (pre-title-extraction),
-                # keep using that label so existing notes are not orphaned.
+                pdf_sha256, pdf_modified_utc = source_fingerprint(paper_path)
+                page_count = count_pdf_pages(paper_path)
+
                 stem_label = paper_label_from_stem(paper_path.stem)
                 stem_notes_path = notes_folder / f"{stem_label} - Notes.md"
+                title_notes_path = notes_folder / f"{paper_label} - Notes.md"
+
                 if stem_notes_path.exists() and paper_label != stem_label:
+                    # Pre-title-extraction note exists under stem — keep it to avoid orphaning.
                     paper_label = stem_label
+                elif title_notes_path.exists() and paper_label != stem_label:
+                    # Title collision: notes at this path belong to a different PDF.
+                    existing_meta = parse_frontmatter(title_notes_path.read_text(encoding="utf-8"))
+                    if existing_meta.get("source_sha256") != pdf_sha256:
+                        paper_label = stem_label
 
                 notes_path = notes_folder / f"{paper_label} - Notes.md"
                 summary_path = summaries_folder / f"{paper_label} - Summary.md"
@@ -1312,9 +1400,6 @@ def main(argv: list[str] | None = None) -> None:
                 manifest_path = assets_dir / f"{prefix}_manifest.json"
                 digest_path = digest_path_for(assets_dir, prefix)
                 slide_images: list[str] = []
-
-                pdf_sha256, pdf_modified_utc = source_fingerprint(paper_path)
-                page_count = count_pdf_pages(paper_path)
 
                 notes_status, notes_reason = analyze_paper_note(
                     notes_path,

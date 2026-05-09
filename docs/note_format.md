@@ -153,7 +153,7 @@ Write the evaluation as a professional practitioner would — evidence-based, sp
 - `## Implications` should cross-link to relevant lecture notes in the vault where the same concept appears
 - Embed page images for figures and tables that are important to the argument (same `assets/` convention as lecture notes)
 
-**Paper summary** uses the same 5-section format as lecture summaries (`## Overview`, `## Key Concepts`, `## Important Terms`, `## Key Takeaways`, `## Review Questions`) but the `## Overview` should name the paper and state the central contribution in 2-3 sentences.
+**Paper summary** uses the same 5-section format as lecture summaries (`## Overview`, `## Key Concepts`, `## Important Terms`, `## Key Takeaways`, `## Review Questions`) but the `## Overview` should name the paper and state the central contribution in 2-3 sentences. Paper summaries use the standard summary frontmatter (`note_type: summary`, `module`, `lecture`) and additionally carry `collection` and `paper_label` for cross-referencing with the paper notes file.
 
 **Reading List** (`{collection}/Reading List.md`) serves the same role as `Module TOC.md` for a lecture module: a scannable roadmap of what papers are in the collection, their topic, and why they are included.
 
