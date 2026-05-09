@@ -1,0 +1,35 @@
+# ── Source lecture PDFs ───────────────────────────────────────────────────────
+**/_inbox/
+
+# ── Generated notes and slide image assets ────────────────────────────────────
+**/Detailed Notes/
+**/Summaries/
+
+# ── Module and vault navigation / concept index files ────────────────────────
+**/Module TOC.md
+**/Concept Index.md
+Vault Concept Index.md
+TOC.md
+Summaries.md
+
+# ── Draft notes ───────────────────────────────────────────────────────────────
+*.partial.md
+
+# ── Audit reports (personal audit history) ────────────────────────────────────
+reports/
+
+# ── Claude Code — local permissions (machine-specific, not for sharing) ───────
+.claude/settings.local.json
+
+# ── Obsidian workspace state ──────────────────────────────────────────────────
+.obsidian/
+
+# ── Python bytecode ───────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# ── OS artefacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
