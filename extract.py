@@ -873,6 +873,49 @@ def sanitize_title_for_label(title: str) -> str:
     return title
 
 
+def _pdf_asset_prefix(stem: str) -> str:
+    """Convert a PDF stem to a normalized asset-file prefix (no consecutive underscores)."""
+    raw = re.sub(r"[^\w]", "_", stem)
+    return re.sub(r"_+", "_", raw).strip("_")
+
+
+def _rename_paper_to_title(pdf_path: Path, papers_dir: Path) -> Path:
+    """Rename a PDF to its title-derived name and update all associated assets and notes."""
+    raw_title = extract_pdf_title(pdf_path)
+    if not raw_title:
+        return pdf_path
+    new_label = sanitize_title_for_label(raw_title)
+    new_path = pdf_path.parent / f"{new_label}.pdf"
+    if new_path == pdf_path or new_path.exists():
+        return pdf_path
+
+    old_prefix = _pdf_asset_prefix(pdf_path.stem)
+    new_prefix = _pdf_asset_prefix(new_label)
+
+    pdf_path.rename(new_path)
+
+    assets_dir = papers_dir.parent / "Notes" / "assets"
+    if assets_dir.is_dir():
+        for asset in sorted(assets_dir.iterdir()):
+            if asset.name.startswith(old_prefix):
+                asset.rename(asset.parent / (new_prefix + asset.name[len(old_prefix):]))
+
+    for md_dir in (papers_dir.parent / "Notes", papers_dir.parent / "Summaries"):
+        if not md_dir.is_dir():
+            continue
+        for note in md_dir.glob("*.md"):
+            text = note.read_text(encoding="utf-8")
+            updated = (
+                text
+                .replace(old_prefix, new_prefix)
+                .replace(f"source_pdf: {pdf_path.name}", f"source_pdf: {new_path.name}")
+            )
+            if updated != text:
+                note.write_text(updated, encoding="utf-8")
+
+    return new_path
+
+
 def scan_papers(
     vault_root: Path,
     apply_renames: bool = True,
@@ -890,6 +933,8 @@ def scan_papers(
         for file_path in sorted(papers_dir.iterdir()):
             if file_path.suffix.lower() != ".pdf" or file_path.name.startswith("."):
                 continue
+            if apply_renames:
+                file_path = _rename_paper_to_title(file_path, papers_dir)
             ready_files.append(file_path)
     return ready_files, issues
 
@@ -1263,7 +1308,7 @@ def main(argv: list[str] | None = None) -> None:
                 notes_partial_path = partial_path_for(notes_path)
                 summary_partial_path = partial_path_for(summary_path)
 
-                prefix = re.sub(r"[^\w]", "_", paper_path.stem)
+                prefix = _pdf_asset_prefix(paper_path.stem)
                 manifest_path = assets_dir / f"{prefix}_manifest.json"
                 digest_path = digest_path_for(assets_dir, prefix)
                 slide_images: list[str] = []
