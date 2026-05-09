@@ -123,6 +123,8 @@ generated_by: claude
 ---
 ```
 
+**Note filename** is derived from the paper's actual title (extracted from PDF metadata or the largest text on page 1), not the source filename. If title extraction fails, the PDF stem is used as fallback.
+
 **Required sections** (use these exact heading strings):
 - `## Citation` — full citation: authors, year, title, journal/venue, DOI if available
 - `## Abstract` — the paper's own abstract or a faithful one-paragraph paraphrase
@@ -130,6 +132,20 @@ generated_by: claude
 - `## Methodology` — data, empirical strategy, model, or theoretical framework used
 - `## Key Findings` — main results; include key numbers, magnitudes, and statistical qualifications where they matter
 - `## Implications` — practical takeaways, limitations, and how the findings connect to other work in the vault
+- `## Critical Evaluation` — see below
+
+**`## Critical Evaluation` format:**
+
+This section is a structured professional assessment. It should cover four points in order:
+
+1. **Contribution** — what this paper adds over prior work; whether the contribution is incremental or substantial
+2. **Robustness** — quality of the evidence: sample size, out-of-sample testing, multiple-comparison concerns, robustness checks, data-mining risk
+3. **Replication feasibility** *(include only when the paper tests an implementable strategy or quantitative model)* — data requirements and availability; estimated implementation complexity; transaction cost sensitivity; capacity constraints; whether the strategy has been shown to hold out-of-sample or in live trading
+4. **Verdict** — a concise bottom-line assessment: whether the findings are credible and, where applicable, whether the strategy is worth attempting to implement given the evidence presented
+
+The Replication feasibility point is conditional: skip it for purely theoretical or non-implementable papers. For empirical papers that test tradeable signals, factor exposures, or portfolio construction methods, this is the most important point in the section.
+
+Write the evaluation as a professional practitioner would — evidence-based, specific about what the paper actually shows, and honest about gaps.
 
 **Body rules:**
 - Each section must have substantive content — not just a restatement of the heading

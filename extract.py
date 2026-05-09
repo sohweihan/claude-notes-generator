@@ -816,11 +816,61 @@ PAPER_NOTE_SECTIONS = [
     "## Methodology",
     "## Key Findings",
     "## Implications",
+    "## Critical Evaluation",
 ]
+
+_TITLE_INVALID_CHARS = re.compile(r'[\\/*?:"<>|\t\n\r]')
+_TITLE_WHITESPACE = re.compile(r"\s+")
+_MAX_TITLE_LENGTH = 120
 
 
 def paper_label_from_stem(stem: str) -> str:
     return stem
+
+
+def extract_pdf_title(pdf_path: Path) -> str | None:
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception:
+        return None
+
+    try:
+        raw = (doc.metadata or {}).get("title", "").strip()
+        if 10 < len(raw) < 200 and not raw.lower().startswith("microsoft"):
+            return raw
+
+        if not len(doc):
+            return None
+
+        page = doc[0]
+        blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE).get("blocks", [])
+        candidates: list[tuple[float, str]] = []
+        for block in blocks:
+            if block.get("type") != 0:
+                continue
+            for line in block.get("lines", []):
+                line_text = " ".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                max_size = max((span.get("size", 0) for span in line.get("spans", [])), default=0)
+                if 15 < len(line_text) < 200 and max_size > 0:
+                    candidates.append((max_size, line_text))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: -x[0])
+        return candidates[0][1]
+    finally:
+        doc.close()
+
+
+def sanitize_title_for_label(title: str) -> str:
+    title = _TITLE_INVALID_CHARS.sub("", title)
+    title = _TITLE_WHITESPACE.sub(" ", title).strip()
+    if len(title) > _MAX_TITLE_LENGTH:
+        truncated = title[:_MAX_TITLE_LENGTH]
+        last_space = truncated.rfind(" ")
+        title = truncated[:last_space] if last_space > 60 else truncated
+    return title
 
 
 def scan_papers(
@@ -1185,7 +1235,11 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"\nProcessing: {paper_path.name}")
                 collection_folder = paper_path.parent.parent
                 collection_name = collection_folder.name
-                paper_label = paper_label_from_stem(paper_path.stem)
+
+                raw_title = extract_pdf_title(paper_path)
+                paper_label = sanitize_title_for_label(raw_title) if raw_title else paper_label_from_stem(paper_path.stem)
+                if raw_title:
+                    print(f"  Title: {paper_label}")
 
                 notes_folder = collection_folder / "Notes"
                 summaries_folder = collection_folder / "Summaries"
@@ -1193,13 +1247,20 @@ def main(argv: list[str] | None = None) -> None:
                 reading_list_path = collection_folder / "Reading List.md"
                 root_toc_path = vault_root / "TOC.md"
 
+                notes_folder.mkdir(parents=True, exist_ok=True)
+                summaries_folder.mkdir(parents=True, exist_ok=True)
+
+                # If a note already exists under the stem-based label (pre-title-extraction),
+                # keep using that label so existing notes are not orphaned.
+                stem_label = paper_label_from_stem(paper_path.stem)
+                stem_notes_path = notes_folder / f"{stem_label} - Notes.md"
+                if stem_notes_path.exists() and paper_label != stem_label:
+                    paper_label = stem_label
+
                 notes_path = notes_folder / f"{paper_label} - Notes.md"
                 summary_path = summaries_folder / f"{paper_label} - Summary.md"
                 notes_partial_path = partial_path_for(notes_path)
                 summary_partial_path = partial_path_for(summary_path)
-
-                notes_folder.mkdir(parents=True, exist_ok=True)
-                summaries_folder.mkdir(parents=True, exist_ok=True)
 
                 prefix = re.sub(r"[^\w]", "_", paper_path.stem)
                 manifest_path = assets_dir / f"{prefix}_manifest.json"
