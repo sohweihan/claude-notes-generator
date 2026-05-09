@@ -809,6 +809,78 @@ def analyze_summary_note(
     return "complete", "all required summary sections present"
 
 
+PAPER_NOTE_SECTIONS = [
+    "## Citation",
+    "## Abstract",
+    "## Motivation",
+    "## Methodology",
+    "## Key Findings",
+    "## Implications",
+]
+
+
+def paper_label_from_stem(stem: str) -> str:
+    return stem
+
+
+def scan_papers(
+    vault_root: Path,
+    apply_renames: bool = True,
+    *,
+    collection_filter: str | None = None,
+) -> tuple[list[Path], list[dict[str, object]]]:
+    ready_files: list[Path] = []
+    issues: list[dict[str, object]] = []
+    for papers_dir in sorted(vault_root.rglob("_papers")):
+        if not papers_dir.is_dir():
+            continue
+        collection_name = papers_dir.parent.name
+        if collection_filter and not matches_module_filter(collection_name, collection_filter):
+            continue
+        for file_path in sorted(papers_dir.iterdir()):
+            if file_path.suffix.lower() != ".pdf" or file_path.name.startswith("."):
+                continue
+            ready_files.append(file_path)
+    return ready_files, issues
+
+
+def analyze_paper_note(
+    note_path: Path,
+    *,
+    collection_name: str | None = None,
+    paper_label: str | None = None,
+    source_sha256: str | None = None,
+    source_modified_utc: str | None = None,
+) -> tuple[str, str]:
+    source_path, text = read_note_source(note_path)
+    if source_path is None or text is None:
+        return "missing", "file does not exist"
+    if text.startswith("__READ_ERROR__:"):
+        return "incomplete", text.removeprefix("__READ_ERROR__:")
+    metadata = parse_frontmatter(text)
+    if source_path.name.endswith(".partial.md"):
+        return "incomplete", "partial file exists"
+    if metadata.get("status") != "complete":
+        return "incomplete", "frontmatter status is missing or not complete"
+    if metadata.get("note_type") != "paper":
+        return "incomplete", "frontmatter note_type is missing or not paper"
+    if collection_name and metadata.get("collection") != collection_name:
+        return "incomplete", "frontmatter collection does not match expected collection"
+    if paper_label and metadata.get("paper_label") != paper_label:
+        return "incomplete", "frontmatter paper_label does not match expected label"
+    if source_sha256 and metadata.get("source_sha256") != source_sha256:
+        return "incomplete", "frontmatter source_sha256 does not match expected PDF hash"
+    if source_modified_utc and metadata.get("source_modified_utc") != source_modified_utc:
+        return "incomplete", "frontmatter source_modified_utc does not match expected PDF timestamp"
+    missing_sections = [s for s in PAPER_NOTE_SECTIONS if s not in text]
+    if missing_sections:
+        return "incomplete", f"missing paper sections: {missing_sections}"
+    for section in PAPER_NOTE_SECTIONS:
+        if not normalize_text(markdown_section(text, section)):
+            return "incomplete", f"section is empty: {section}"
+    return "complete", "all paper sections present"
+
+
 def render_slide_image(page, image_path: Path) -> None:
     if image_path.exists():
         return
@@ -1095,6 +1167,134 @@ def main(argv: list[str] | None = None) -> None:
                         else extract_audit_fields({}),
                         "summary_audit": extract_audit_fields(parse_frontmatter(summary_notes_path.read_text(encoding="utf-8")))
                         if summary_notes_path.exists()
+                        else extract_audit_fields({}),
+                    }
+                )
+
+            paper_files, paper_intake_issues = scan_papers(
+                vault_root,
+                apply_renames=True,
+                collection_filter=args.module,
+            )
+            intake_issues.extend(paper_intake_issues)
+
+            for paper_path in paper_files:
+                if len(results) >= args.max_files:
+                    break
+
+                print(f"\nProcessing: {paper_path.name}")
+                collection_folder = paper_path.parent.parent
+                collection_name = collection_folder.name
+                paper_label = paper_label_from_stem(paper_path.stem)
+
+                notes_folder = collection_folder / "Notes"
+                summaries_folder = collection_folder / "Summaries"
+                assets_dir = notes_folder / "assets"
+                reading_list_path = collection_folder / "Reading List.md"
+                root_toc_path = vault_root / "TOC.md"
+
+                notes_path = notes_folder / f"{paper_label} - Notes.md"
+                summary_path = summaries_folder / f"{paper_label} - Summary.md"
+                notes_partial_path = partial_path_for(notes_path)
+                summary_partial_path = partial_path_for(summary_path)
+
+                notes_folder.mkdir(parents=True, exist_ok=True)
+                summaries_folder.mkdir(parents=True, exist_ok=True)
+
+                prefix = re.sub(r"[^\w]", "_", paper_path.stem)
+                manifest_path = assets_dir / f"{prefix}_manifest.json"
+                digest_path = digest_path_for(assets_dir, prefix)
+                slide_images: list[str] = []
+
+                pdf_sha256, pdf_modified_utc = source_fingerprint(paper_path)
+                page_count = count_pdf_pages(paper_path)
+
+                notes_status, notes_reason = analyze_paper_note(
+                    notes_path,
+                    collection_name=collection_name,
+                    paper_label=paper_label,
+                    source_sha256=pdf_sha256,
+                    source_modified_utc=pdf_modified_utc,
+                )
+                summary_status, summary_reason = analyze_summary_note(
+                    summary_path,
+                    module_name=collection_name,
+                    lecture_label=paper_label,
+                    pdf_filename=paper_path.name,
+                    source_sha256=pdf_sha256,
+                    source_modified_utc=pdf_modified_utc,
+                    page_count=page_count,
+                )
+
+                needs_notes = notes_status != "complete"
+                needs_summary = summary_status != "complete"
+                needs_reading_list = not reading_list_path.exists()
+                needs_root_toc = not root_toc_path.exists()
+                needs_manifest = manifest_needs_refresh(
+                    manifest_path,
+                    pdf_path=paper_path,
+                    source_sha256=pdf_sha256,
+                    source_modified_utc=pdf_modified_utc,
+                )
+                needs_digest = digest_needs_refresh(
+                    digest_path,
+                    pdf_path=paper_path,
+                    source_sha256=pdf_sha256,
+                    source_modified_utc=pdf_modified_utc,
+                )
+
+                if not any((needs_notes, needs_summary, needs_reading_list, needs_root_toc, needs_manifest, needs_digest)):
+                    print("  Skipping - paper notes are complete.")
+                    continue
+
+                if needs_notes or needs_manifest or needs_digest:
+                    page_count, manifest_path, slide_images = build_slide_manifest(
+                        paper_path,
+                        assets_dir,
+                        prefix,
+                        source_sha256=pdf_sha256,
+                        source_modified_utc=pdf_modified_utc,
+                    )
+                elif RENDER_MODE in {"all", "selective"}:
+                    slide_images = load_manifest_image_paths(manifest_path)
+
+                results.append(
+                    {
+                        "source_type": "paper",
+                        "original_file": str(paper_path),
+                        "pdf_filename": paper_path.name,
+                        "collection_folder": str(collection_folder),
+                        "collection_name": collection_name,
+                        "paper_label": paper_label,
+                        "notes_folder": str(notes_folder),
+                        "summaries_folder": str(summaries_folder),
+                        "source_sha256": pdf_sha256,
+                        "source_modified_utc": pdf_modified_utc,
+                        "notes_path": str(notes_path),
+                        "notes_partial_path": str(notes_partial_path),
+                        "summary_notes_path": str(summary_path),
+                        "summary_partial_path": str(summary_partial_path),
+                        "reading_list_path": str(reading_list_path),
+                        "root_toc_path": str(root_toc_path),
+                        "page_count": page_count,
+                        "manifest_path": str(manifest_path),
+                        "digest_path": str(digest_path),
+                        "slide_images": slide_images,
+                        "notes_status": notes_status,
+                        "notes_status_reason": notes_reason,
+                        "summary_status": summary_status,
+                        "summary_status_reason": summary_reason,
+                        "needs_notes": needs_notes,
+                        "needs_summary": needs_summary,
+                        "needs_manifest": needs_manifest,
+                        "needs_digest": needs_digest,
+                        "needs_reading_list": needs_reading_list,
+                        "needs_root_toc": needs_root_toc,
+                        "notes_audit": extract_audit_fields(parse_frontmatter(notes_path.read_text(encoding="utf-8")))
+                        if notes_path.exists()
+                        else extract_audit_fields({}),
+                        "summary_audit": extract_audit_fields(parse_frontmatter(summary_path.read_text(encoding="utf-8")))
+                        if summary_path.exists()
                         else extract_audit_fields({}),
                     }
                 )

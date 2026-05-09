@@ -8,6 +8,7 @@ from pathlib import Path
 
 from extract import (
     analyze_detailed_note,
+    analyze_paper_note,
     analyze_summary_note,
     canonical_pdf_filename,
     count_pdf_pages,
@@ -19,10 +20,12 @@ from extract import (
     matches_lecture_filter,
     matches_module_filter,
     module_code_from_name,
+    paper_label_from_stem,
     parse_filename,
     parse_frontmatter,
     resolve_note_path,
     scan_inboxes,
+    scan_papers,
     write_json_payload,
 )
 
@@ -200,6 +203,75 @@ def discover_lectures(vault_root: Path, inbox_files: list[Path]) -> list[dict[st
             str(record["lecture_label"]).lower(),
         ),
     )
+
+
+def discover_papers(vault_root: Path, paper_files: list[Path]) -> list[dict[str, object]]:
+    records: dict[tuple[str, str], dict[str, object]] = {}
+
+    for paper_path in paper_files:
+        collection_folder = paper_path.parent.parent
+        paper_label = paper_label_from_stem(paper_path.stem)
+        key = (collection_folder.name, paper_label)
+        records[key] = {
+            "source_type": "paper",
+            "collection_folder": collection_folder,
+            "collection_name": collection_folder.name,
+            "paper_label": paper_label,
+            "pdf_path": paper_path,
+            "source_pdf": paper_path.name,
+            "notes_path": None,
+            "summary_path": None,
+        }
+
+    for child in sorted(vault_root.iterdir()):
+        if not child.is_dir() or child.name.startswith(".") or child.name == "__pycache__":
+            continue
+        notes_folder = child / "Notes"
+        summaries_folder = child / "Summaries"
+
+        if notes_folder.exists():
+            for notes_path in sorted(notes_folder.glob("* - Notes.md")):
+                metadata = parse_frontmatter(notes_path.read_text(encoding="utf-8"))
+                if metadata.get("note_type") != "paper":
+                    continue
+                paper_label = metadata.get("paper_label") or note_label_from_path(notes_path, "Notes")
+                key = (child.name, paper_label)
+                record = records.setdefault(
+                    key,
+                    {
+                        "source_type": "paper",
+                        "collection_folder": child,
+                        "collection_name": child.name,
+                        "paper_label": paper_label,
+                        "pdf_path": None,
+                        "source_pdf": metadata.get("source_pdf"),
+                        "notes_path": None,
+                        "summary_path": None,
+                    },
+                )
+                record["notes_path"] = notes_path
+
+        if summaries_folder.exists():
+            for summary_path in sorted(summaries_folder.glob("* - Summary.md")):
+                metadata = parse_frontmatter(summary_path.read_text(encoding="utf-8"))
+                if metadata.get("note_type") not in ("paper", "summary"):
+                    continue
+                paper_label = metadata.get("paper_label") or metadata.get("lecture") or note_label_from_path(summary_path, "Summary")
+                key = (child.name, paper_label)
+                record = records.get(key)
+                if record is not None and record.get("source_type") == "paper":
+                    record["summary_path"] = summary_path
+
+    papers = list(records.values())
+    for record in papers:
+        collection_folder = record["collection_folder"]
+        paper_label = record["paper_label"]
+        if record["notes_path"] is None:
+            record["notes_path"] = collection_folder / "Notes" / f"{paper_label} - Notes.md"
+        if record["summary_path"] is None:
+            record["summary_path"] = collection_folder / "Summaries" / f"{paper_label} - Summary.md"
+
+    return sorted(papers, key=lambda r: (str(r["collection_name"]).lower(), str(r["paper_label"]).lower()))
 
 
 def extract_slide_sections(detailed_text: str) -> dict[int, str]:
@@ -458,8 +530,105 @@ def main(argv: list[str] | None = None) -> None:
             }
         )
 
+    paper_files, _ = scan_papers(vault_root, apply_renames=False, collection_filter=args.module)
+    papers_report: list[dict[str, object]] = []
+
+    for paper in discover_papers(vault_root, paper_files):
+        collection_name = str(paper["collection_name"])
+        paper_label = str(paper["paper_label"])
+
+        if args.module and not matches_module_filter(collection_name, args.module):
+            continue
+        if args.lecture and paper_label.lower() not in (args.lecture or "").lower() and (args.lecture or "").lower() not in paper_label.lower():
+            continue
+
+        collection_folder = paper["collection_folder"]
+        pdf_source = paper["pdf_path"]
+        notes_path = Path(paper["notes_path"])
+        summary_path = Path(paper["summary_path"])
+
+        if isinstance(pdf_source, Path):
+            page_count = count_pdf_pages(pdf_source)
+            pdf_sha256 = file_sha256(pdf_source)
+            pdf_modified_utc = file_modified_utc(pdf_source)
+        else:
+            page_count = None
+            pdf_sha256 = None
+            pdf_modified_utc = None
+
+        notes_status, notes_reason = analyze_paper_note(
+            notes_path,
+            collection_name=collection_name,
+            paper_label=paper_label,
+            source_sha256=pdf_sha256,
+            source_modified_utc=pdf_modified_utc,
+        )
+        summary_status, summary_reason = analyze_summary_note(
+            summary_path,
+            module_name=collection_name,
+            lecture_label=paper_label,
+            source_sha256=pdf_sha256,
+            source_modified_utc=pdf_modified_utc,
+            page_count=page_count,
+        )
+
+        mechanical_issues: list[str] = []
+        pending: list[str] = []
+
+        if pdf_source is None:
+            mechanical_issues.append("source PDF missing from _papers")
+        if notes_status == "missing":
+            pending.append("paper notes not generated yet")
+        elif notes_status != "complete":
+            mechanical_issues.append(f"paper notes: {notes_reason}")
+        if summary_status == "missing":
+            pending.append("paper summary not generated yet")
+        elif summary_status != "complete":
+            mechanical_issues.append(f"paper summary: {summary_reason}")
+
+        for md_path in [notes_path, summary_path]:
+            if md_path.exists():
+                metadata = parse_frontmatter(md_path.read_text(encoding="utf-8"))
+                if metadata.get("status") != "complete":
+                    mechanical_issues.append(f"{md_path.name}: missing complete status in frontmatter")
+                allowed_missing_stems: set[str] = set()
+                if notes_status == "missing":
+                    allowed_missing_stems.add(notes_path.stem)
+                if summary_status == "missing":
+                    allowed_missing_stems.add(summary_path.stem)
+                mechanical_issues.extend(
+                    f"{md_path.name}: {issue}" for issue in validate_links(md_path, allowed_missing_stems)
+                )
+
+        reading_list = collection_folder / "Reading List.md"
+        if not reading_list.exists():
+            mechanical_issues.append("missing Reading List.md")
+
+        status = "issues" if mechanical_issues else ("pending" if pending else "ok")
+
+        papers_report.append(
+            {
+                "source_type": "paper",
+                "collection": collection_name,
+                "paper_label": paper_label,
+                "source_pdf": paper.get("source_pdf"),
+                "notes_path": str(notes_path),
+                "summary_path": str(summary_path),
+                "status": status,
+                "pending": pending,
+                "mechanical_issues": mechanical_issues,
+                "issues": mechanical_issues,
+                "notes_audit": extract_audit_fields(parse_frontmatter(notes_path.read_text(encoding="utf-8")))
+                if notes_path.exists()
+                else extract_audit_fields({}),
+                "summary_audit": extract_audit_fields(parse_frontmatter(summary_path.read_text(encoding="utf-8")))
+                if summary_path.exists()
+                else extract_audit_fields({}),
+            }
+        )
+
     payload = build_validate_report(
-        lectures_report,
+        lectures_report + papers_report,
         intake_issues,
         module_filter=args.module,
         lecture_filter=args.lecture,

@@ -101,6 +101,46 @@ These rules apply to all note content written for Obsidian (KaTeX math renderer,
 - Inside an Obsidian callout (`> [!type] Title`), represent blank lines as `>` on an otherwise-empty line.
 - A truly empty line closes the callout block.
 
+## Paper Notes
+
+Paper notes cover research papers, working papers, and any non-lecture PDFs. They live alongside module lectures (in a module's `Notes/` subfolder) or in a standalone `Research Papers/` collection at the vault root.
+
+**Source PDFs** go in a `_papers/` directory — either `Research Papers/_papers/` or `{Module}/_papers/`.
+
+**Frontmatter:**
+
+```yaml
+---
+status: complete
+note_type: paper
+collection: {collection_name}
+paper_label: {pdf_stem}
+source_pdf: {pdf_filename}
+source_sha256: {source_sha256}
+source_modified_utc: {source_modified_utc}
+page_count: {page_count}
+generated_by: claude
+---
+```
+
+**Required sections** (use these exact heading strings):
+- `## Citation` — full citation: authors, year, title, journal/venue, DOI if available
+- `## Abstract` — the paper's own abstract or a faithful one-paragraph paraphrase
+- `## Motivation` — the research question and why it matters; what gap it fills
+- `## Methodology` — data, empirical strategy, model, or theoretical framework used
+- `## Key Findings` — main results; include key numbers, magnitudes, and statistical qualifications where they matter
+- `## Implications` — practical takeaways, limitations, and how the findings connect to other work in the vault
+
+**Body rules:**
+- Each section must have substantive content — not just a restatement of the heading
+- For quantitative papers: `## Key Findings` should include at least one worked numerical result or key statistic
+- `## Implications` should cross-link to relevant lecture notes in the vault where the same concept appears
+- Embed page images for figures and tables that are important to the argument (same `assets/` convention as lecture notes)
+
+**Paper summary** uses the same 5-section format as lecture summaries (`## Overview`, `## Key Concepts`, `## Important Terms`, `## Key Takeaways`, `## Review Questions`) but the `## Overview` should name the paper and state the central contribution in 2-3 sentences.
+
+**Reading List** (`{collection}/Reading List.md`) serves the same role as `Module TOC.md` for a lecture module: a scannable roadmap of what papers are in the collection, their topic, and why they are included.
+
 ## Module TOC
 
 Purpose:

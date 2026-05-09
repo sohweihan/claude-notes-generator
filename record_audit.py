@@ -13,8 +13,9 @@ from extract import (
     matches_module_filter,
     parse_frontmatter,
     scan_inboxes,
+    scan_papers,
 )
-from validate import discover_lectures
+from validate import discover_lectures, discover_papers
 
 
 AUDIT_FIELDS = (
@@ -120,10 +121,31 @@ def resolve_target_lecture(vault_root: Path, module_filter: str, lecture_filter:
         if matches_module_filter(str(lecture["module_name"]), module_filter)
         and matches_lecture_filter(str(lecture["module_name"]), str(lecture["lecture_label"]), lecture_filter)
     ]
+
     if not candidates:
-        raise SystemExit(f"No lecture matched module={module_filter!r} lecture={lecture_filter!r}.")
+        paper_files, _ = scan_papers(vault_root, apply_renames=False, collection_filter=module_filter)
+        paper_candidates = []
+        for paper in discover_papers(vault_root, paper_files):
+            collection_name = str(paper["collection_name"])
+            paper_label = str(paper["paper_label"])
+            if not matches_module_filter(collection_name, module_filter):
+                continue
+            if lecture_filter and lecture_filter.lower() not in paper_label.lower() and paper_label.lower() not in lecture_filter.lower():
+                continue
+            paper_candidates.append({
+                "module_name": collection_name,
+                "lecture_label": paper_label,
+                "detailed_path": paper["notes_path"],
+                "summary_path": paper["summary_path"],
+                "pdf_path": paper.get("pdf_path"),
+                "source_type": "paper",
+            })
+        candidates = paper_candidates
+
+    if not candidates:
+        raise SystemExit(f"No lecture or paper matched module={module_filter!r} lecture={lecture_filter!r}.")
     if len(candidates) > 1:
-        raise SystemExit(f"Multiple lectures matched module={module_filter!r} lecture={lecture_filter!r}.")
+        raise SystemExit(f"Multiple matches found for module={module_filter!r} lecture={lecture_filter!r}.")
     return candidates[0]
 
 
