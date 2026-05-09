@@ -1061,9 +1061,10 @@ def main(argv: list[str] | None = None) -> None:
             for issue in intake_issues:
                 print(f"Intake {issue['status']}: {issue['reason']}")
 
-            if not files:
+            has_papers = bool(scan_papers(vault_root, apply_renames=False, collection_filter=args.module)[0])
+            if not files and not has_papers:
                 if not intake_issues:
-                    print("No matching PDF files found in any _inbox/ folder.")
+                    print("No matching PDF files found in any _inbox/ or _papers/ folder.")
                 payload = build_extract_result(
                     intake_issues,
                     [],

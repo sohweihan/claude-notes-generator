@@ -1,13 +1,16 @@
-# ── Source lecture PDFs ───────────────────────────────────────────────────────
+# ── Source PDFs (lectures and papers) ─────────────────────────────────────────
 **/_inbox/
+**/_papers/
 
 # ── Generated notes and slide image assets ────────────────────────────────────
 **/Detailed Notes/
 **/Summaries/
+Research Papers/Notes/
 
 # ── Module and vault navigation / concept index files ────────────────────────
 **/Module TOC.md
 **/Concept Index.md
+**/Reading List.md
 Vault Concept Index.md
 TOC.md
 Summaries.md

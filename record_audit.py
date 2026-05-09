@@ -132,12 +132,13 @@ def resolve_target_lecture(vault_root: Path, module_filter: str, lecture_filter:
                 continue
             if lecture_filter and lecture_filter.lower() not in paper_label.lower() and paper_label.lower() not in lecture_filter.lower():
                 continue
+            raw_pdf = paper.get("pdf_path")
             paper_candidates.append({
                 "module_name": collection_name,
                 "lecture_label": paper_label,
                 "detailed_path": paper["notes_path"],
                 "summary_path": paper["summary_path"],
-                "pdf_path": paper.get("pdf_path"),
+                "pdf_path": Path(raw_pdf) if raw_pdf else None,
                 "source_type": "paper",
             })
         candidates = paper_candidates
